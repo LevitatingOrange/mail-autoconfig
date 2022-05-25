@@ -3,11 +3,13 @@ use std::{convert::Infallible, sync::Arc};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
+use hyper::StatusCode;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
 use tokio::signal;
+use tracing::error;
 
 use crate::global_state::GlobalState;
 
@@ -19,7 +21,7 @@ mod global_state;
 struct Cli {
     /// This programs config file location
     #[clap(short, long, default_value_t = String::from("config.toml"))]
-    config_file: String,
+    config: String,
 
     #[clap(subcommand)]
     command: Commands,
@@ -55,14 +57,39 @@ async fn shutdown_signal() {
     println!("signal received, starting graceful shutdown");
 }
 
-async fn service(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
+async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
     let global_state = global_state.load();
-    Ok(Response::new(global_state.config.message.to_owned().into()))
+    let host = req.headers()[hyper::header::HOST].to_str()?;
+    let host = host.split_once(":").map(|(s, _)| s).unwrap_or(host);
+    if let Some(domain_idx) = global_state.host_map.get(host) {
+        let domain = &global_state.config.domains[*domain_idx];
+        match req.uri().path() {
+            "/mail/config-v1.1.xml" => {
+                Ok(Response::new(format!("Your email hostname: {}", domain.email_domain).into()))
+            }
+            _ => {
+                Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Body::empty())?)
+            }
+        }
+
+    } else {
+        Ok(Response::builder().status(StatusCode::FORBIDDEN).body(Body::empty())?)
+    }
+}
+
+async fn service(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+    match serve(global_state, req).await {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            error!("Unexpected error while processing request: {}", err);
+            Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap())
+        }
+    } 
 }
 
 async fn run(global_state: Arc<GlobalState>) -> Result<()> {
-    println!("Hello, you can gracefully stop this program with Ctrl-C. Reload its config by sending the SIGUSR1 signal.");
-    // TODO
+    println!("Server started, you can gracefully stop this server with Ctrl-C. Reload its config by sending the SIGUSR1 signal.");
+    // [TODO]: from config
     let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
 
     let make_service = make_service_fn(move |_conn| {
@@ -75,7 +102,7 @@ async fn run(global_state: Arc<GlobalState>) -> Result<()> {
         }
     });
 
-    let server = Server::bind(&addr).serve(make_service).await?;
+    Server::bind(&addr).serve(make_service).with_graceful_shutdown(shutdown_signal()).await?;
 
     Ok(())
 }
@@ -86,18 +113,11 @@ async fn main() -> Result<()> {
     color_eyre::install()?;
 
     let cli = Cli::parse();
-    let config_path = cli.config_file.into();
+    let config_path = cli.config.into();
     let global_state = GlobalState::new(config_path).await?;
 
-    tokio::select! {
-    _ = shutdown_signal() => {
-        println!("Bye!");
-    }
-    result = match cli.command {
-        Commands::Run => run(global_state),
-    } => {
-            result?;
-    }
-    }
+    match cli.command {
+        Commands::Run => run(global_state).await?,
+    }    
     Ok(())
 }

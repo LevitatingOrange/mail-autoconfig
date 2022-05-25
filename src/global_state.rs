@@ -3,7 +3,7 @@ use arc_swap::{ArcSwap, Guard};
 use eyre::Result;
 use std::{
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::Arc, collections::HashMap,
 };
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, instrument, warn};
@@ -76,11 +76,19 @@ impl GlobalState {
 #[derive(Debug, PartialEq)]
 pub struct GlobalStateData {
     pub config: Config,
+    /// Mapping of allowed domain to index
+    pub host_map: HashMap<String, usize>
 }
 
 impl GlobalStateData {
     async fn new(config_path: &Path) -> Result<Self> {
         let config = Config::load(config_path).await?;
-        Ok(Self { config })
+        let mut host_map = HashMap::new();
+        for (i, domain) in config.domains.iter().enumerate() {
+            for allowed_host in &domain.allowed_hosts {
+                host_map.insert(allowed_host.to_owned(), i);
+            }
+        }
+        Ok(Self { config, host_map })
     }
 }

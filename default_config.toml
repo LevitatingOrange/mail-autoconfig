@@ -1,2 +1,7 @@
-message = "Hello World"
-
+[[domains]]
+email_domain = "example.com"
+allowed_hosts = [
+    "autoconfig.example.com",
+    "autodiscover.example.com",
+    "mail.example.com"
+]

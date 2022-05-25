@@ -6,7 +6,7 @@ use tracing::info;
 
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct Config {
-    pub message: String,
+    pub domains: Vec<Domain>
 }
 
 impl Config {
@@ -16,4 +16,20 @@ impl Config {
         let config = toml::from_str(&contents)?;
         Ok(config)
     }
+}
+
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct Domain {
+    pub email_domain: String,
+    pub allowed_hosts: Vec<String>,
+    pub smtp: ServerConfig,
+    pub imap: ServerConfig
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct ServerConfig {
+    host: String,
+    port: u16,
+    ssl: bool
 }
