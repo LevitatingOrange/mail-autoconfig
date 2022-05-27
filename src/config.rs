@@ -12,6 +12,7 @@ pub struct Config {
     // [NOTE]: A change of this value after server start (with a reload) will have no effect!
     pub socket_address: SocketAddr, 
     pub template_path: String,
+    pub watch_path: Option<String>
 }
 
 impl Config {
@@ -26,7 +27,6 @@ impl Config {
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct Domain {
     pub email_domain: String,
-    pub ssl_cert: String,
     pub ssl_chain: String,
     pub ssl_key: String,
     pub display_name: String,

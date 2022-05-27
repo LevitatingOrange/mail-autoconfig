@@ -1,22 +1,30 @@
 use std::net::SocketAddr;
+use std::path::Path;
+use std::time::Duration;
 use std::{convert::Infallible, sync::Arc};
+use std::fmt::Debug;
 
 use clap::{Parser, Subcommand};
+use color_eyre::Report;
 use eyre::Result;
 use futures::TryStreamExt;
+use global_state::Notify;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
 use hyper::{Method, StatusCode};
+use notify::{RecommendedWatcher, Watcher};
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
 use serde::Serialize;
 use tera::Context;
 use tokio::io::BufReader;
+use tokio::runtime::{Builder, Runtime};
 use tokio::signal;
+use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::spawn_blocking;
 use tokio_util::io::StreamReader;
-use tracing::error;
+use tracing::{error, info, warn, debug};
 use util::get_email_from_request;
 use uuid::Uuid;
 use eyre::eyre;
@@ -239,6 +247,34 @@ async fn run(global_state: Arc<GlobalState>) -> Result<()> {
     Ok(())
 }
 
+fn watch_for_changes(rt: Runtime, send: Sender<Notify>, watch_path: impl AsRef<Path> + Debug) -> Result<()> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(2))?;
+    watcher.watch(&watch_path, notify::RecursiveMode::Recursive)?;
+    info!("Watching for changes on {:#?}. Will reload state after change", watch_path);
+    loop {
+        let ev = rx.recv()?;
+        debug!("Notify event was: {:?}", ev);
+        // ignore notify events as we read files only after a reload anyways
+        match ev {
+            notify::DebouncedEvent::NoticeWrite(_) | notify::DebouncedEvent::NoticeRemove(_) => continue,
+            notify::DebouncedEvent::Error(error, path) => {
+                warn!("File watch error: {:#}, in file: {:?}", error, path);
+                continue;
+            },
+            _ => {
+            }
+        }
+        info!("Files have changed, issuing reload request...");
+        // Sadly have to re-clone here
+        let send = send.clone();
+        rt.block_on(async move {
+            send.send(Notify::Reload).await?;
+            Ok::<(), Report>(())
+        })?;
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
@@ -246,7 +282,23 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let config_path = cli.config.into();
-    let global_state = GlobalState::new(config_path).await?;
+    let (send, recv) = channel(1);
+    let global_state = GlobalState::new(config_path, Some(recv)).await?;
+    let gs = global_state.load();
+    
+    // Watch for changes and reload server (mainly for cert changes)
+    if let Some(watch_path) = &gs.config.watch_path {
+        let watch_path = watch_path.to_owned();
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        std::thread::spawn(move || {
+            if let Err(err) = watch_for_changes(rt, send, watch_path) {
+                warn!("File watching error: {:#}, reload by file change is disabled from now on", err);
+            }
+        });
+    }
 
     match cli.command {
         Commands::Run => run(global_state).await?,

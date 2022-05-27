@@ -1,10 +1,12 @@
 template_path = "templates/*"
 socket_address = "127.0.0.1:3000"
+# Uncomment to reload the server on file change
+# watch_path = "some_path/"
 [[domains]]
 email_domain = "localhost"
-ssl_cert ="/etc/ssl/cert.pem"
+# Could also contain only the end certificate if you do not want to provide a chain
+ssl_chain ="/etc/ssl/chain.pem"
 ssl_key = "/etc/ssl/chain.pem"
-ssl_chain = "/etc/ssl/private/key.pem"
 display_name = "localhost mail service"
 display_short_name = "localhost email"
 allowed_hosts = [

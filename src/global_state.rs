@@ -1,6 +1,6 @@
 use crate::config::Config;
 use arc_swap::{ArcSwap, Guard};
-use eyre::Result;
+use eyre::{Result, ensure};
 use openssl::{stack::Stack, x509::X509, pkey::{PKey, Private}};
 use std::{
     collections::HashMap,
@@ -10,18 +10,23 @@ use std::{
 use tera::Tera;
 use tokio::{
     signal::unix::{signal, SignalKind},
-    task::spawn_blocking,
+    task::spawn_blocking, sync::mpsc::Receiver,
 };
 use tracing::{error, info, instrument, warn};
 
 /// A simple wrapper for a global state that allows for reloading of the config via a unix signal
 pub struct GlobalState(ArcSwap<GlobalStateData>);
 
+#[derive(Debug)]
+pub enum Notify {
+    Reload,
+}
+
 impl GlobalState {
-    pub async fn new(config_path: PathBuf) -> Result<Arc<Self>> {
+    pub async fn new(config_path: PathBuf, notify: Option<Receiver<Notify>>) -> Result<Arc<Self>> {
         let initial_state = GlobalStateData::new(&config_path).await?;
         let this = Arc::new(Self(ArcSwap::from_pointee(initial_state)));
-        this.clone().install_reload_handler(config_path);
+        this.clone().install_reload_handler(config_path, notify);
         Ok(this)
     }
 
@@ -52,7 +57,18 @@ impl GlobalState {
         self.0.load()
     }
 
-    fn install_reload_handler(self: Arc<Self>, config_path: PathBuf) {
+    fn install_reload_handler(self: Arc<Self>, config_path: PathBuf, notify: Option<Receiver<Notify>>) {
+        if let Some(mut receiver) = notify {
+            let this = self.clone();
+            let config_path = config_path.clone();
+            tokio::spawn(async move {
+                while let Some(msg) = receiver.recv().await {
+                    match msg {
+                        Notify::Reload => this.reload_state(&config_path).await
+                    }
+                }
+            });
+        }
         tokio::spawn(async move {
             if cfg!(unix) {
                 match signal(SignalKind::user_defined1()) {
@@ -60,20 +76,17 @@ impl GlobalState {
                         while signal.recv().await.is_some() {
                             self.reload_state(&config_path).await;
                         }
-                        warn!("Signal stream has ended. State reloading is disabled from now on!");
-                        std::future::pending::<()>().await;
+                        warn!("Signal stream has ended. State reloading via signal is disabled from now on!");
                     }
                     Err(err) => {
                         warn!(
-                            "Could not install signal handler: {}, state reloading is disabled!",
+                            "Could not install signal handler: {:#}, state reloading via signal is disabled!",
                             err
                         );
-                        std::future::pending::<()>().await;
                     }
                 }
             } else {
                 warn!("Stae reloading is not supported on non-unix OSes");
-                std::future::pending::<()>().await;
             }
         });
     }
@@ -86,11 +99,11 @@ pub struct Certs {
 }
 
 impl Certs {
-    async fn new(cert_path: impl AsRef<Path>, chain_path: impl AsRef<Path>,key_path: impl AsRef<Path>) -> Result<Self> {
-        let cert_buf = tokio::fs::read(cert_path).await?;
-        let cert = X509::from_pem(&cert_buf)?;
+    async fn new(chain_path: impl AsRef<Path>,key_path: impl AsRef<Path>) -> Result<Self> {
         let chain_buf = tokio::fs::read(chain_path).await?;
         let chain_stack = X509::stack_from_pem(&chain_buf)?;
+        ensure!(chain_stack.len() > 0, "At least one certificate has to be in the chain!");
+        let cert = chain_stack[0].clone();
         let mut chain = Stack::new()?;
         for cc in chain_stack {
             chain.push(cc)?;
@@ -123,7 +136,7 @@ impl GlobalStateData {
             for allowed_host in &domain.allowed_hosts {
                 host_map.insert(allowed_host.to_owned(), i);
             }
-            cert_map.insert(domain.email_domain.to_owned(), Certs::new(&domain.ssl_cert, &domain.ssl_chain, &domain.ssl_key).await?);
+            cert_map.insert(domain.email_domain.to_owned(), Certs::new(&domain.ssl_chain, &domain.ssl_key).await?);
         }
         let template_path = config.template_path.clone();
         let templates = spawn_blocking(move || Tera::new(&template_path)).await??;
