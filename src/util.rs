@@ -1,7 +1,7 @@
 use eyre::{bail, ensure, Result};
 use futures::pin_mut;
 use rxml::{AsyncEventReadExt, AsyncParser, ResolvedEvent};
-use tokio::io::{AsyncBufRead};
+use tokio::io::AsyncBufRead;
 
 pub async fn get_email_from_request(xml: impl AsyncBufRead) -> Result<String> {
     pin_mut!(xml);

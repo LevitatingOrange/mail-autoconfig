@@ -1,11 +1,13 @@
+use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::path::Path;
 use std::time::Duration;
 use std::{convert::Infallible, sync::Arc};
-use std::fmt::Debug;
 
 use clap::{Parser, Subcommand};
 use color_eyre::Report;
+use email_address::EmailAddress;
+use eyre::eyre;
 use eyre::Result;
 use futures::TryStreamExt;
 use global_state::Notify;
@@ -16,7 +18,7 @@ use hyper::{
 use hyper::{Method, StatusCode};
 use notify::{RecommendedWatcher, Watcher};
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tera::Context;
 use tokio::io::BufReader;
 use tokio::runtime::{Builder, Runtime};
@@ -24,10 +26,9 @@ use tokio::signal;
 use tokio::sync::mpsc::{channel, Sender};
 use tokio::task::spawn_blocking;
 use tokio_util::io::StreamReader;
-use tracing::{error, info, warn, debug};
+use tracing::{debug, error, info, warn};
 use util::get_email_from_request;
 use uuid::Uuid;
-use eyre::eyre;
 
 use crate::config::Domain;
 use crate::global_state::GlobalState;
@@ -84,7 +85,7 @@ struct Payload {
     description: String,
     display_name: String,
     ptype: String,
-    organization: String
+    organization: String,
 }
 
 impl Payload {
@@ -110,7 +111,7 @@ impl Payload {
             description,
             display_name,
             ptype,
-            organization
+            organization,
         }
     }
     fn new_domain(domain: &Domain) -> Self {
@@ -122,38 +123,73 @@ impl Payload {
     }
 }
 
+#[derive(Deserialize)]
+struct MobileConfigQuery {
+    email: EmailAddress,
+}
+
 async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
     let global_state = global_state.load();
     let host = req.headers()[hyper::header::HOST].to_str()?;
     let host = host.split_once(":").map(|(s, _)| s).unwrap_or(host);
-    if let Some(domain_idx) = global_state.host_map.get(host).map(|s|*s) {
+    if let Some(domain_idx) = global_state.host_map.get(host).map(|s| *s) {
         let domain = &global_state.config.domains[domain_idx];
         let mut context = Context::new();
         context.insert("domain", &domain);
         match &req.uri().path().to_lowercase()[..] {
-            "/email.mobileconfig" => {
-                // Apple Mail
+            "/generate_profile" => {
                 if req.method() == Method::GET {
-                    context.insert("plist_payload", &Payload::new_plist(domain));
-                    context.insert("domain_payload", &Payload::new_domain(domain));
-                    let rendered_config = global_state
+                    let rendered = global_state
                         .templates
-                        .render("apple_config.plist", &context)?;
-                    let global_state = global_state.clone();
-                    let signed = spawn_blocking(move || -> Result<Vec<u8>> {
-                        let domain = &global_state.config.domains[domain_idx];
-                        let certs = global_state.cert_map.get(&domain.email_domain).ok_or(eyre!("No cert for domain {}", domain.email_domain))?;
-                        let singed = Pkcs7::sign(&certs.cert, &certs.key, &certs.chain, rendered_config.as_bytes(), Pkcs7Flags::empty())?.to_der()?; 
-                        Ok(singed)
-                    }).await??;
+                        .render("apple_email.html", &context)?;
 
-
-                    let response = Response::builder().header("Content-Type", "application/pkcs7-mime; smime-type=signed-data; name=email.mobileconfig").header("Content-Disposition", "attachment; filename=email.mobileconfig");
-                    Ok(response.body(signed.into())?)
+                    let response = Response::builder().header("Content-Type", "text/html");
+                    Ok(response.body(rendered.into())?)
                 } else {
                     Ok(Response::builder()
                         .status(StatusCode::METHOD_NOT_ALLOWED)
                         .body(Body::empty())?)
+                }
+            }
+            "/email.mobileconfig" => {
+                // Apple Mail
+                match *req.method() {
+                    Method::GET => {
+                        let query: MobileConfigQuery = serde_urlencoded::from_str(
+                            req.uri().query().ok_or(eyre!("query missing"))?,
+                        )?;
+                        context.insert("plist_payload", &Payload::new_plist(domain));
+                        context.insert("domain_payload", &Payload::new_domain(domain));
+                        context.insert("email_address", &query.email);
+                        let rendered_config = global_state
+                            .templates
+                            .render("apple_config.plist", &context)?;
+                        println!("{}", rendered_config);
+                        let global_state = global_state.clone();
+                        let signed = spawn_blocking(move || -> Result<Vec<u8>> {
+                            let domain = &global_state.config.domains[domain_idx];
+                            let certs = global_state
+                                .cert_map
+                                .get(&domain.email_domain)
+                                .ok_or(eyre!("No cert for domain {}", domain.email_domain))?;
+                            let singed = Pkcs7::sign(
+                                &certs.cert,
+                                &certs.key,
+                                &certs.chain,
+                                rendered_config.as_bytes(),
+                                Pkcs7Flags::empty(),
+                            )?
+                            .to_der()?;
+                            Ok(singed)
+                        })
+                        .await??;
+
+                        let response = Response::builder().header("Content-Type", "application/pkcs7-mime; smime-type=signed-data; name=email.mobileconfig").header("Content-Disposition", "attachment; filename=email.mobileconfig");
+                        Ok(response.body(signed.into())?)
+                    }
+                    _ => Ok(Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::empty())?),
                 }
             }
 
@@ -185,7 +221,7 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                     let rendered_config = global_state
                         .templates
                         .render("microsoft_config.xml", &context)?;
-                    
+
                     let response = Response::builder().header("Content-Type", "text/xml");
                     Ok(response.body(rendered_config.into())?)
                 } else {
@@ -247,23 +283,31 @@ async fn run(global_state: Arc<GlobalState>) -> Result<()> {
     Ok(())
 }
 
-fn watch_for_changes(rt: Runtime, send: Sender<Notify>, watch_path: impl AsRef<Path> + Debug) -> Result<()> {
+fn watch_for_changes(
+    rt: Runtime,
+    send: Sender<Notify>,
+    watch_path: impl AsRef<Path> + Debug,
+) -> Result<()> {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut watcher: RecommendedWatcher = Watcher::new(tx, Duration::from_secs(2))?;
     watcher.watch(&watch_path, notify::RecursiveMode::Recursive)?;
-    info!("Watching for changes on {:#?}. Will reload state after change", watch_path);
+    info!(
+        "Watching for changes on {:#?}. Will reload state after change",
+        watch_path
+    );
     loop {
         let ev = rx.recv()?;
         debug!("Notify event was: {:?}", ev);
         // ignore notify events as we read files only after a reload anyways
         match ev {
-            notify::DebouncedEvent::NoticeWrite(_) | notify::DebouncedEvent::NoticeRemove(_) => continue,
+            notify::DebouncedEvent::NoticeWrite(_) | notify::DebouncedEvent::NoticeRemove(_) => {
+                continue
+            }
             notify::DebouncedEvent::Error(error, path) => {
                 warn!("File watch error: {:#}, in file: {:?}", error, path);
                 continue;
-            },
-            _ => {
             }
+            _ => {}
         }
         info!("Files have changed, issuing reload request...");
         // Sadly have to re-clone here
@@ -285,17 +329,17 @@ async fn main() -> Result<()> {
     let (send, recv) = channel(1);
     let global_state = GlobalState::new(config_path, Some(recv)).await?;
     let gs = global_state.load();
-    
+
     // Watch for changes and reload server (mainly for cert changes)
     if let Some(watch_path) = &gs.config.watch_path {
         let watch_path = watch_path.to_owned();
-        let rt = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
+        let rt = Builder::new_current_thread().enable_all().build().unwrap();
         std::thread::spawn(move || {
             if let Err(err) = watch_for_changes(rt, send, watch_path) {
-                warn!("File watching error: {:#}, reload by file change is disabled from now on", err);
+                warn!(
+                    "File watching error: {:#}, reload by file change is disabled from now on",
+                    err
+                );
             }
         });
     }

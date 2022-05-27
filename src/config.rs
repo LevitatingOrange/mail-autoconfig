@@ -10,9 +10,9 @@ use tracing::info;
 pub struct Config {
     pub domains: Vec<Domain>,
     // [NOTE]: A change of this value after server start (with a reload) will have no effect!
-    pub socket_address: SocketAddr, 
+    pub socket_address: SocketAddr,
     pub template_path: String,
-    pub watch_path: Option<String>
+    pub watch_path: Option<String>,
 }
 
 impl Config {

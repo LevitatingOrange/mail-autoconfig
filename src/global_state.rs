@@ -1,7 +1,11 @@
 use crate::config::Config;
 use arc_swap::{ArcSwap, Guard};
-use eyre::{Result, ensure};
-use openssl::{stack::Stack, x509::X509, pkey::{PKey, Private}};
+use eyre::{ensure, Result};
+use openssl::{
+    pkey::{PKey, Private},
+    stack::Stack,
+    x509::X509,
+};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -10,7 +14,8 @@ use std::{
 use tera::Tera;
 use tokio::{
     signal::unix::{signal, SignalKind},
-    task::spawn_blocking, sync::mpsc::Receiver,
+    sync::mpsc::Receiver,
+    task::spawn_blocking,
 };
 use tracing::{error, info, instrument, warn};
 
@@ -57,14 +62,18 @@ impl GlobalState {
         self.0.load()
     }
 
-    fn install_reload_handler(self: Arc<Self>, config_path: PathBuf, notify: Option<Receiver<Notify>>) {
+    fn install_reload_handler(
+        self: Arc<Self>,
+        config_path: PathBuf,
+        notify: Option<Receiver<Notify>>,
+    ) {
         if let Some(mut receiver) = notify {
             let this = self.clone();
             let config_path = config_path.clone();
             tokio::spawn(async move {
                 while let Some(msg) = receiver.recv().await {
                     match msg {
-                        Notify::Reload => this.reload_state(&config_path).await
+                        Notify::Reload => this.reload_state(&config_path).await,
                     }
                 }
             });
@@ -94,15 +103,18 @@ impl GlobalState {
 
 pub struct Certs {
     pub cert: X509,
-    pub chain: Stack<X509>, 
-    pub key: PKey<Private>
+    pub chain: Stack<X509>,
+    pub key: PKey<Private>,
 }
 
 impl Certs {
-    async fn new(chain_path: impl AsRef<Path>,key_path: impl AsRef<Path>) -> Result<Self> {
+    async fn new(chain_path: impl AsRef<Path>, key_path: impl AsRef<Path>) -> Result<Self> {
         let chain_buf = tokio::fs::read(chain_path).await?;
         let chain_stack = X509::stack_from_pem(&chain_buf)?;
-        ensure!(chain_stack.len() > 0, "At least one certificate has to be in the chain!");
+        ensure!(
+            chain_stack.len() > 0,
+            "At least one certificate has to be in the chain!"
+        );
         let cert = chain_stack[0].clone();
         let mut chain = Stack::new()?;
         for cc in chain_stack {
@@ -112,9 +124,7 @@ impl Certs {
         let key_buf = tokio::fs::read(key_path).await?;
         let key = PKey::private_key_from_pem(&key_buf)?;
 
-        Ok(Self {
-            cert,chain,key
-        })
+        Ok(Self { cert, chain, key })
     }
 }
 
@@ -136,7 +146,10 @@ impl GlobalStateData {
             for allowed_host in &domain.allowed_hosts {
                 host_map.insert(allowed_host.to_owned(), i);
             }
-            cert_map.insert(domain.email_domain.to_owned(), Certs::new(&domain.ssl_chain, &domain.ssl_key).await?);
+            cert_map.insert(
+                domain.email_domain.to_owned(),
+                Certs::new(&domain.ssl_chain, &domain.ssl_key).await?,
+            );
         }
         let template_path = config.template_path.clone();
         let templates = spawn_blocking(move || Tera::new(&template_path)).await??;
