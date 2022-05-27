@@ -131,7 +131,6 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                     let rendered_config = global_state
                         .templates
                         .render("apple_config.plist", &context)?;
-                    // TODO async blocked
                     let global_state = global_state.clone();
                     let signed = spawn_blocking(move || -> Result<Vec<u8>> {
                         let domain = &global_state.config.domains[domain_idx];
@@ -216,20 +215,23 @@ async fn service(
 
 async fn run(global_state: Arc<GlobalState>) -> Result<()> {
     println!("Server started, you can gracefully stop this server with Ctrl-C. Reload its config by sending the SIGUSR1 signal.");
-    // [TODO]: from config
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
-
+    let gs = global_state.clone();
     let make_service = make_service_fn(move |_conn| {
-        let global_state = global_state.clone();
+        let gs = gs.clone();
         async move {
             Ok::<_, eyre::Report>(service_fn(move |req| {
-                let global_state = global_state.clone();
+                let global_state = gs.clone();
                 async move { service(global_state, req).await }
             }))
         }
     });
 
-    Server::bind(&addr)
+    let global_state = global_state.load();
+    let socket_addr = global_state.config.socket_address.clone();
+    // drop here so that the first config does not have to live in memory indefenitely after a reload
+    drop(global_state);
+
+    Server::bind(&socket_addr)
         .serve(make_service)
         .with_graceful_shutdown(shutdown_signal())
         .await?;

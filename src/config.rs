@@ -1,4 +1,4 @@
-use std::fmt;
+use std::{fmt, net::SocketAddr};
 
 use eyre::Result;
 use serde::{Deserialize, Serialize};
@@ -9,6 +9,8 @@ use tracing::info;
 #[derive(Deserialize, Serialize, PartialEq, Debug)]
 pub struct Config {
     pub domains: Vec<Domain>,
+    // [NOTE]: A change of this value after server start (with a reload) will have no effect!
+    pub socket_address: SocketAddr, 
     pub template_path: String,
 }
 

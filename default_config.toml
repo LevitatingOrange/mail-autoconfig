@@ -1,4 +1,5 @@
 template_path = "templates/*"
+socket_address = "127.0.0.1:3000"
 [[domains]]
 email_domain = "localhost"
 ssl_cert ="/etc/ssl/cert.pem"
