@@ -1,9 +1,19 @@
-ARG BASE_IMAGE=clux/muslrust:stable
-FROM ${BASE_IMAGE} AS builder
+ARG BUILD_IMAGE=clux/muslrust:stable
 
+FROM ${BUILD_IMAGE} AS chef
+RUN cargo install cargo-chef --locked
 WORKDIR /etc/src/
-ADD . ./
 
+FROM chef AS planner
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+# Speed up docker build by caching dependencies
+COPY --from=planner /etc/src/recipe.json recipe.json
+RUN cargo chef cook --release --target x86_64-unknown-linux-musl --recipe-path recipe.json
+
+COPY . .
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
 FROM alpine:latest
@@ -16,6 +26,7 @@ RUN echo  $'#!/bin/sh\nkill -SIGUSR1 1' > /usr/local/bin/reload-state
 RUN chmod +x /usr/local/bin/reload-state
 COPY --from=builder /etc/src/target/x86_64-unknown-linux-musl/release/mail-autoconfig /usr/local/bin/mail-autoconfig
 COPY --from=builder /etc/src/default_config.toml /srv/config.toml
+COPY --from=builder /etc/src/templates /srv/templates
 
 CMD ["mail-autoconfig", "run"]
 
