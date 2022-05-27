@@ -1,7 +1,19 @@
+template_path = "templates/*"
 [[domains]]
-email_domain = "example.com"
+email_domain = "localhost"
+ssl_cert = "~/cert_temp/client.cer"
+ssl_key = "~/cert_temp/client.key"
+ssl_chain = "~/cert_temp/chain.pem"
+display_name = "localhost mail service"
+display_short_name = "localhost email"
 allowed_hosts = [
-    "autoconfig.example.com",
-    "autodiscover.example.com",
-    "mail.example.com"
+    "localhost"
 ]
+[domains.smtp]
+host = "smtp.localhost"
+port = 465
+socket_type = "SSL"
+[domains.imap]
+host = "imap.localhost"
+port = 993
+socket_type = "SSL"

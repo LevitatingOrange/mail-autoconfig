@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Autodiscover xmlns="http://schemas.microsoft.com/exchange/autodiscover/responseschema/2006">
+  <Response xmlns="http://schemas.microsoft.com/exchange/autodiscover/outlook/responseschema/2006a">
+    <User>
+      <DisplayName>{{ domain.display_name }}</DisplayName>
+    </User>
+    <Account>
+      <AccountType>email</AccountType>
+      <Action>settings</Action>
+      <Protocol>
+        <Type>IMAP</Type>
+        <Server>{{ domain.imap.host }}</Server>
+        <Port>{{ domain.imap.port }}</Port>
+        <DomainRequired>off</DomainRequired>
+        <SPA>off</SPA>
+        {% if domain.imap.socket_type == "SSL" or domain.imap.socket_type == "STARTTLS" %}
+        <SSL>on</SSL>
+        {% else %}
+        <SSL>off</SSL>
+        {% endif %}
+        <AuthRequired>on</AuthRequired>
+        <LoginName>{{ email }}</LoginName>
+      </Protocol>
+      <Protocol>
+        <Type>SMTP</Type>
+        <Server>{{ domain.smtp.host }}</Server>
+        <Port>{{ domain.smtp.port }}</Port>
+        <DomainRequired>off</DomainRequired>
+        <SPA>off</SPA>
+        {% if domain.smtp.socket_type == "SSL" or domain.smtp.socket_type == "STARTTLS" %}
+        <SSL>on</SSL>
+        {% else %}
+        <SSL>off</SSL>
+        {% endif %}
+        <AuthRequired>on</AuthRequired>
+        <LoginName>{{ email }}</LoginName>
+      </Protocol>
+    </Account>
+  </Response>
+</Autodiscover>

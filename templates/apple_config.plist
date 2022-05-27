@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>PayloadContent</key>
+    <array>
+      <dict>
+        <key>EmailAccountType</key>
+        <string>EmailTypeIMAP</string>
+        <key>IncomingMailServerAuthentication</key>
+        <string>EmailAuthPassword</string>
+        <key>IncomingMailServerHostName</key>
+        <string>{{ domain.imap.host }}</string>
+        <key>IncomingMailServerPortNumber</key>
+        <integer>{{ domain.imap.port }}</integer>
+        <key>IncomingMailServerUseSSL</key>
+        {% if domain.imap.socket_type == "SSL" or domain.imap.socket_type == "STARTTLS" %}
+        <true/>
+        {% else %}
+        <false/>
+        {% endif %}
+        <key>OutgoingMailServerAuthentication</key>
+        <string>EmailAuthPassword</string>
+        <key>OutgoingMailServerHostName</key>
+        <string>{{ domain.smtp.host }}</string>
+        <key>OutgoingMailServerPortNumber</key>
+        <integer>{{ domain.smtp.port }}</integer>
+        <key>OutgoingMailServerUseSSL</key>
+        {% if domain.smtp.socket_type == "SSL" or domain.smtp.socket_type == "STARTTLS" %}
+        <true/>
+        {% else %}
+        <false/>
+        {% endif %}
+        <key>OutgoingPasswordSameAsIncomingPassword</key>
+        <true/>
+        <key>PayloadDescription</key>
+        <string>{{ domain_payload.description }}</string>
+        <key>PayloadDisplayName</key>
+        <string>{{ domain_payload.display_name }}</string>
+        <key>PayloadIdentifier</key>
+        <string>{{ domain_payload.identifier }}</string>
+        <key>PayloadOrganization</key>
+        <string>{{ domain_payload.organization }}</string>
+        <key>PayloadRemovalDisallowed</key>
+        <false/>
+        <key>PayloadType</key>
+        <string>{{ domain_payload.ptype }}</string>
+        <key>PayloadUUID</key>
+        <string>{{ domain_payload.uuid }}</string>
+        <key>PayloadVersion</key>
+        <integer>1</integer>
+
+        <key>PreventAppSheet</key>
+        <false/>
+        <key>PreventMove</key>
+        <false/>
+        <key>SMIMESigningUserOverrideable</key>
+        <true/>
+        <key>SMIMESigningCertificateUUIDUserOverrideable</key>
+        <true/>
+        <key>SMIMEEncryptByDefaultUserOverrideable</key>
+        <true/>
+        <key>SMIMEEncryptionCertificateUUIDUserOverrideable</key>
+        <true/>
+        <key>SMIMEEnableEncryptionPerMessageSwitch</key>
+        <true/>
+        <key>allowMailDrop</key>
+        <true/>
+      </dict>
+     
+    </array>
+    <key>PayloadDescription</key>
+    <string>{{ plist_payload.description }}</string>
+    <key>PayloadDisplayName</key>
+    <string>{{ plist_payload.display_name }}</string>
+    <key>PayloadIdentifier</key>
+    <string>{{ plist_payload.identifier }}</string>
+    <key>PayloadOrganization</key>
+    <string>{{ plist_payload.organization }}</string>
+    <key>PayloadRemovalDisallowed</key>
+    <false/>
+    <key>PayloadType</key>
+    <string>{{ plist_payload.ptype }}</string>
+    <key>PayloadUUID</key>
+    <string>{{ plist_payload.uuid }}</string>
+    <key>PayloadVersion</key>
+    <integer>1</integer>
+  </dict>
+</plist>

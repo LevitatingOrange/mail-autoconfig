@@ -3,18 +3,30 @@ use std::{convert::Infallible, sync::Arc};
 
 use clap::{Parser, Subcommand};
 use eyre::Result;
-use hyper::StatusCode;
+use futures::TryStreamExt;
 use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
+use hyper::{Method, StatusCode};
+use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
+use serde::Serialize;
+use tera::Context;
+use tokio::io::BufReader;
 use tokio::signal;
+use tokio::task::spawn_blocking;
+use tokio_util::io::StreamReader;
 use tracing::error;
+use util::get_email_from_request;
+use uuid::Uuid;
+use eyre::eyre;
 
+use crate::config::Domain;
 use crate::global_state::GlobalState;
 
 mod config;
 mod global_state;
+mod util;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -57,34 +69,149 @@ async fn shutdown_signal() {
     println!("signal received, starting graceful shutdown");
 }
 
+#[derive(Debug, Serialize)]
+struct Payload {
+    uuid: Uuid,
+    identifier: String,
+    description: String,
+    display_name: String,
+    ptype: String,
+    organization: String
+}
+
+impl Payload {
+    fn new_plist(domain: &Domain) -> Self {
+        let uuid = Uuid::new_v4();
+        let parts: Vec<&str> = domain
+            .email_domain
+            .split('.')
+            .rev()
+            .chain(std::iter::once("autoconfig"))
+            .collect();
+        let identifier = parts.join(".");
+        let description = format!(
+            "Install this profile to autoconfigure your email on {}",
+            domain.email_domain
+        );
+        let display_name = format!("Email Autoconfiguration");
+        let ptype = "Configuration".to_owned();
+        let organization = format!("{} mail provider", domain.email_domain);
+        Self {
+            uuid,
+            identifier,
+            description,
+            display_name,
+            ptype,
+            organization
+        }
+    }
+    fn new_domain(domain: &Domain) -> Self {
+        let mut this = Self::new_plist(domain);
+        this.ptype = "com.apple.mail.managed".to_owned();
+        this.description = domain.display_name.to_owned();
+        this.display_name = domain.display_short_name.to_owned();
+        this
+    }
+}
+
 async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
     let global_state = global_state.load();
     let host = req.headers()[hyper::header::HOST].to_str()?;
     let host = host.split_once(":").map(|(s, _)| s).unwrap_or(host);
-    if let Some(domain_idx) = global_state.host_map.get(host) {
-        let domain = &global_state.config.domains[*domain_idx];
-        match req.uri().path() {
-            "/mail/config-v1.1.xml" => {
-                Ok(Response::new(format!("Your email hostname: {}", domain.email_domain).into()))
-            }
-            _ => {
-                Ok(Response::builder().status(StatusCode::NOT_FOUND).body(Body::empty())?)
-            }
-        }
+    if let Some(domain_idx) = global_state.host_map.get(host).map(|s|*s) {
+        let domain = &global_state.config.domains[domain_idx];
+        let mut context = Context::new();
+        context.insert("domain", &domain);
+        match &req.uri().path().to_lowercase()[..] {
+            "/email.mobileconfig" => {
+                // Apple Mail
+                if req.method() == Method::GET {
+                    context.insert("plist_payload", &Payload::new_plist(domain));
+                    context.insert("domain_payload", &Payload::new_domain(domain));
+                    let rendered_config = global_state
+                        .templates
+                        .render("apple_config.plist", &context)?;
+                    // TODO async blocked
+                    let global_state = global_state.clone();
+                    let signed = spawn_blocking(move || -> Result<Vec<u8>> {
+                        let domain = &global_state.config.domains[domain_idx];
+                        let certs = global_state.cert_map.get(&domain.email_domain).ok_or(eyre!("No cert for domain {}", domain.email_domain))?;
+                        let singed = Pkcs7::sign(&certs.cert, &certs.key, &certs.chain, rendered_config.as_bytes(), Pkcs7Flags::empty())?.to_der()?; 
+                        Ok(singed)
+                    }).await??;
 
+
+                    let response = Response::builder().header("Content-Type", "application/pkcs7-mime; smime-type=signed-data; name=email.mobileconfig").header("Content-Disposition", "attachment; filename=email.mobileconfig");
+                    Ok(response.body(signed.into())?)
+                } else {
+                    Ok(Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::empty())?)
+                }
+            }
+
+            "/mail/config-v1.1.xml" => {
+                // Thunderbird
+                if req.method() == Method::GET {
+                    let rendered_config = global_state
+                        .templates
+                        .render("thunderbolt_config.xml", &context)?;
+
+                    let response = Response::builder().header("Content-Type", "text/xml");
+                    Ok(response.body(rendered_config.into())?)
+                } else {
+                    Ok(Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::empty())?)
+                }
+            }
+            "/autodiscover/autodiscover.xml" => {
+                // Microsoft mail
+                if req.method() == Method::POST {
+                    let buf_read =
+                        BufReader::new(StreamReader::new(req.into_body().map_err(|err| {
+                            error!("Request stream err: {}", err);
+                            tokio::io::Error::new(tokio::io::ErrorKind::UnexpectedEof, "eof")
+                        })));
+                    let email = get_email_from_request(buf_read).await?;
+                    context.insert("email", &email);
+                    let rendered_config = global_state
+                        .templates
+                        .render("microsoft_config.xml", &context)?;
+                    
+                    let response = Response::builder().header("Content-Type", "text/xml");
+                    Ok(response.body(rendered_config.into())?)
+                } else {
+                    Ok(Response::builder()
+                        .status(StatusCode::METHOD_NOT_ALLOWED)
+                        .body(Body::empty())?)
+                }
+            }
+            _ => Ok(Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .body(Body::empty())?),
+        }
     } else {
-        Ok(Response::builder().status(StatusCode::FORBIDDEN).body(Body::empty())?)
+        Ok(Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(Body::empty())?)
     }
 }
 
-async fn service(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>, Infallible> {
+async fn service(
+    global_state: Arc<GlobalState>,
+    req: Request<Body>,
+) -> Result<Response<Body>, Infallible> {
     match serve(global_state, req).await {
         Ok(response) => Ok(response),
         Err(err) => {
-            error!("Unexpected error while processing request: {}", err);
-            Ok(Response::builder().status(StatusCode::INTERNAL_SERVER_ERROR).body(Body::empty()).unwrap())
+            error!("Unexpected error while processing request: {:#}", err);
+            Ok(Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::empty())
+                .unwrap())
         }
-    } 
+    }
 }
 
 async fn run(global_state: Arc<GlobalState>) -> Result<()> {
@@ -102,7 +229,10 @@ async fn run(global_state: Arc<GlobalState>) -> Result<()> {
         }
     });
 
-    Server::bind(&addr).serve(make_service).with_graceful_shutdown(shutdown_signal()).await?;
+    Server::bind(&addr)
+        .serve(make_service)
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
 
     Ok(())
 }
@@ -118,6 +248,6 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Run => run(global_state).await?,
-    }    
+    }
     Ok(())
 }

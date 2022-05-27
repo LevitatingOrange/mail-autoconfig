@@ -7,7 +7,7 @@ ADD . ./
 RUN cargo build --target x86_64-unknown-linux-musl --release
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+RUN apk --no-cache add ca-certificates libssl1.1 libcrypto1.1
 RUN apk add --no-cache tini
 ENTRYPOINT ["/sbin/tini", "--"]
 WORKDIR /srv
