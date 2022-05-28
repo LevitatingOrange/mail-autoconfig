@@ -741,6 +741,7 @@ dependencies = [
  "color-eyre",
  "email_address",
  "eyre",
+ "form_urlencoded",
  "futures",
  "hyper",
  "notify",
@@ -748,7 +749,6 @@ dependencies = [
  "rxml",
  "serde",
  "serde_json",
- "serde_urlencoded",
  "tera",
  "thiserror",
  "tokio",
@@ -1285,18 +1285,6 @@ version = "1.0.81"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9b7ce2b32a1aed03c558dc61a5cd328f15aff2dbc17daad8fb8af04d2100e15c"
 dependencies = [
- "itoa",
- "ryu",
- "serde",
-]
-
-[[package]]
-name = "serde_urlencoded"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d3491c14715ca2294c4d6a88f15e84739788c1d030eed8c110436aafdaa2f3fd"
-dependencies = [
- "form_urlencoded",
  "itoa",
  "ryu",
  "serde",

@@ -4,11 +4,14 @@
   <dict>
     <key>PayloadContent</key>
     <array>
+      {% for email_address, domain_payload in payloads %}
       <dict>
-        <key>EmailAccountType</key>
-        <string>EmailTypeIMAP</string>
         <key>EmailAddress</key>
         <string>{{ email_address }}</string>
+        <key>IncomingMailServerUsername</key>
+        <string>{{ email_address }}</string>
+        <key>EmailAccountType</key>
+        <string>EmailTypeIMAP</string>
         <key>IncomingMailServerAuthentication</key>
         <string>EmailAuthPassword</string>
         <key>IncomingMailServerHostName</key>
@@ -16,13 +19,7 @@
         <key>IncomingMailServerPortNumber</key>
         <integer>{{ domain.imap.port }}</integer>
         <key>IncomingMailServerUseSSL</key>
-        {% if domain.imap.socket_type == "SSL" or domain.imap.socket_type == "STARTTLS" %}
-        <true/>
-        {% else %}
-        <false/>
-        {% endif %}
-        <key>IncomingMailServerUsername</key>
-        <string>{{ email_address }}</string>
+        {% if domain.imap.socket_type == "SSL" or domain.imap.socket_type == "STARTTLS" %}<true/>{% else %}<false/>{% endif %}
         <key>OutgoingMailServerAuthentication</key>
         <string>EmailAuthPassword</string>
         <key>OutgoingMailServerHostName</key>
@@ -30,11 +27,7 @@
         <key>OutgoingMailServerPortNumber</key>
         <integer>{{ domain.smtp.port }}</integer>
         <key>OutgoingMailServerUseSSL</key>
-        {% if domain.smtp.socket_type == "SSL" or domain.smtp.socket_type == "STARTTLS" %}
-        <true/>
-        {% else %}
-        <false/>
-        {% endif %}
+        {% if domain.smtp.socket_type == "SSL" or domain.smtp.socket_type == "STARTTLS" %}<true/>{% else %}<false/>{% endif %}
         <key>OutgoingMailServerUsername</key>
         <string>{{ email_address }}</string>
         <key>OutgoingPasswordSameAsIncomingPassword</key>
@@ -73,7 +66,7 @@
         <key>allowMailDrop</key>
         <true/>
       </dict>
-     
+    {% endfor %} 
     </array>
     <key>PayloadDescription</key>
     <string>{{ plist_payload.description }}</string>

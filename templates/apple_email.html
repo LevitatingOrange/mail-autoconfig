@@ -32,10 +32,14 @@
       }
       .input-label {
         width: 100%;
+        display: flex;
+        flex-direction: row;
+        gap: 10px;
       }
       input {
         width: 100%;
         font-size: 16px;
+        padding: 10px;
       }
 
       button {
@@ -46,6 +50,15 @@
         background-color: #0074d9;
         color: #FFFFFF;
       }
+
+      .plus-button {
+        padding: 0px;
+        min-width: 44px;
+        min-height: 44px;
+        font-size: 24px;
+      }
+
+
 
       article {
         max-width: 500px;
@@ -84,12 +97,15 @@
         </header>
         <p>
           To download your autoconfiguration profile for apple devices, please
-          enter the email address of your account for {{ domain.email_domain }}:
+          enter the email address(es) of your account for {{ domain.email_domain }}:
         </p>
-        <form method="GET" action="/email.mobileconfig">
+        <form id="mail-form" method="GET" action="/email.mobileconfig">
           <label class="input-label">
-	    <input type="email" name="email" placeholder="Email" required/>
-	  </label>
+	        <input type="email" name="email" placeholder="Email" required/>
+            <button class="plus-button" type="button" onclick="addEmail()">
+                + 
+            </button>
+	      </label>
           <label>
 	    <button type="submit">
               Create autoconfiguration profile
@@ -98,5 +114,30 @@
         </form>
       </article>
     </main>
+  <script type="text/javascript">
+        function addEmail() {
+            var form = document.getElementById("mail-form");
+            var labels = document.getElementsByClassName("input-label");
+            var last_label = labels[labels.length - 1];
+            var new_label = last_label.cloneNode(false);
+            for (node of last_label.childNodes) {
+                if (node.tagName !== undefined && node.tagName.toLowerCase() === "input") {
+                    var new_input = node.cloneNode(true);
+                    new_input.value = "";
+                    new_label.appendChild(new_input);
+                }
+            }
+            form.insertBefore(new_label, last_label.nextSibling);
+
+//            var new_label = document.createElement("label");
+//            var new_input = document.createElement("input");
+//            new_label.classList.add("input-label");
+//            new_input.setAttribute("type", "email");
+//            new_input.setAttribute("name", "emails[]");
+//            new_input.setAttribute("placeholder", "Email");
+//            new_input.setAttribute("required", true);
+//            new_label.appendChild(new_input);
+        }
+  </script>
   </body>
 </html>

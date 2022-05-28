@@ -1,12 +1,16 @@
+use std::collections::HashMap;
 use std::fmt::Debug;
+use std::iter::{repeat, repeat_with};
 use std::net::SocketAddr;
 use std::path::Path;
+use std::str::FromStr;
 use std::time::Duration;
 use std::{convert::Infallible, sync::Arc};
 
 use clap::{Parser, Subcommand};
 use color_eyre::Report;
 use email_address::EmailAddress;
+use eyre::ensure;
 use eyre::eyre;
 use eyre::Result;
 use futures::TryStreamExt;
@@ -15,7 +19,7 @@ use hyper::{
     service::{make_service_fn, service_fn},
     Body, Request, Response, Server,
 };
-use hyper::{Method, StatusCode};
+use hyper::{Method, StatusCode, Uri};
 use notify::{RecommendedWatcher, Watcher};
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
 use serde::{Deserialize, Serialize};
@@ -123,9 +127,21 @@ impl Payload {
     }
 }
 
-#[derive(Deserialize)]
-struct MobileConfigQuery {
-    email: EmailAddress,
+fn get_mails(uri: &Uri, email_domain: &str) -> Result<Vec<String>> {
+    let mut emails = Vec::new();
+    for (key, value) in
+        form_urlencoded::parse(uri.query().ok_or(eyre!("query missing"))?.as_bytes())
+    {
+        ensure!(key == "email", "only email query keys are allowed!");
+        let parsed = EmailAddress::from_str(&value)?;
+        ensure!(
+            parsed.domain() == email_domain,
+            "email {} does not belong to this server",
+            value
+        );
+        emails.push(parsed.to_string());
+    }
+    Ok(emails)
 }
 
 async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
@@ -155,16 +171,27 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                 // Apple Mail
                 match *req.method() {
                     Method::GET => {
-                        let query: MobileConfigQuery = serde_urlencoded::from_str(
-                            req.uri().query().ok_or(eyre!("query missing"))?,
-                        )?;
+                        let emails = match get_mails(req.uri(), &domain.email_domain) {
+                            Ok(v) => v,
+                            Err(err) => {
+                                return Ok(Response::builder()
+                                    .status(StatusCode::BAD_REQUEST)
+                                    .body(format!("Error: {:#}", err).into())?);
+                            }
+                        };
+                        debug!("Got emails: {:?}", emails);
                         context.insert("plist_payload", &Payload::new_plist(domain));
-                        context.insert("domain_payload", &Payload::new_domain(domain));
-                        context.insert("email_address", &query.email);
+                        let payloads: HashMap<String, Payload> = emails
+                            .into_iter()
+                            .zip(repeat_with(|| Payload::new_domain(domain)))
+                            .collect();
+                        context.insert("payloads", &payloads);
+
+                        //context.insert("domain_payload", &Payload::new_domain(domain));
+                        //context.insert("email_address", &query.email);
                         let rendered_config = global_state
                             .templates
                             .render("apple_config.plist", &context)?;
-                        println!("{}", rendered_config);
                         let global_state = global_state.clone();
                         let signed = spawn_blocking(move || -> Result<Vec<u8>> {
                             let domain = &global_state.config.domains[domain_idx];
