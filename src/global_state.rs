@@ -112,7 +112,7 @@ impl Certs {
         let chain_buf = tokio::fs::read(chain_path).await?;
         let chain_stack = X509::stack_from_pem(&chain_buf)?;
         ensure!(
-            chain_stack.len() > 0,
+            !chain_stack.is_empty(),
             "At least one certificate has to be in the chain!"
         );
         let cert = chain_stack[0].clone();

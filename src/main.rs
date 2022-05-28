@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::iter::{repeat, repeat_with};
-use std::net::SocketAddr;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
@@ -22,7 +20,7 @@ use hyper::{
 use hyper::{Method, StatusCode, Uri};
 use notify::{RecommendedWatcher, Watcher};
 use openssl::pkcs7::{Pkcs7, Pkcs7Flags};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tera::Context;
 use tokio::io::BufReader;
 use tokio::runtime::{Builder, Runtime};
@@ -106,7 +104,7 @@ impl Payload {
             "Install this profile to autoconfigure your email on {}",
             domain.email_domain
         );
-        let display_name = format!("Email Autoconfiguration");
+        let display_name = "Email Autoconfiguration".to_owned();
         let ptype = "Configuration".to_owned();
         let organization = format!("{} mail provider", domain.email_domain);
         Self {
@@ -118,28 +116,33 @@ impl Payload {
             organization,
         }
     }
-    fn new_domain(domain: &Domain) -> Self {
+    fn new_domain(domain: &Domain, name: &str, email_address: &str) -> Self {
         let mut this = Self::new_plist(domain);
         this.ptype = "com.apple.mail.managed".to_owned();
         this.description = domain.display_name.to_owned();
-        this.display_name = domain.display_short_name.to_owned();
+        this.description.push_str(&format!(": {}", email_address));
+        this.display_name = email_address.to_owned();
+        this.identifier.push_str(&format!(".{}", name));
         this
     }
 }
 
-fn get_mails(uri: &Uri, email_domain: &str) -> Result<Vec<String>> {
-    let mut emails = Vec::new();
+fn get_mails(uri: &Uri, domain: &Domain) -> Result<HashMap<String, Payload>> {
+    let mut emails = HashMap::new();
     for (key, value) in
         form_urlencoded::parse(uri.query().ok_or(eyre!("query missing"))?.as_bytes())
     {
         ensure!(key == "email", "only email query keys are allowed!");
         let parsed = EmailAddress::from_str(&value)?;
+
+        ensure!(!emails.contains_key(parsed.as_ref()), "duplicate email");
         ensure!(
-            parsed.domain() == email_domain,
+            parsed.domain() == domain.email_domain,
             "email {} does not belong to this server",
             value
         );
-        emails.push(parsed.to_string());
+        let payload = Payload::new_domain(domain, parsed.local_part(), parsed.as_ref());
+        emails.insert(parsed.to_string(), payload);
     }
     Ok(emails)
 }
@@ -147,8 +150,8 @@ fn get_mails(uri: &Uri, email_domain: &str) -> Result<Vec<String>> {
 async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Response<Body>> {
     let global_state = global_state.load();
     let host = req.headers()[hyper::header::HOST].to_str()?;
-    let host = host.split_once(":").map(|(s, _)| s).unwrap_or(host);
-    if let Some(domain_idx) = global_state.host_map.get(host).map(|s| *s) {
+    let host = host.split_once(':').map(|(s, _)| s).unwrap_or(host);
+    if let Some(domain_idx) = global_state.host_map.get(host).copied() {
         let domain = &global_state.config.domains[domain_idx];
         let mut context = Context::new();
         context.insert("domain", &domain);
@@ -171,7 +174,7 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                 // Apple Mail
                 match *req.method() {
                     Method::GET => {
-                        let emails = match get_mails(req.uri(), &domain.email_domain) {
+                        let emails = match get_mails(req.uri(), domain) {
                             Ok(v) => v,
                             Err(err) => {
                                 return Ok(Response::builder()
@@ -181,14 +184,9 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                         };
                         debug!("Got emails: {:?}", emails);
                         context.insert("plist_payload", &Payload::new_plist(domain));
-                        let payloads: HashMap<String, Payload> = emails
-                            .into_iter()
-                            .zip(repeat_with(|| Payload::new_domain(domain)))
-                            .collect();
+                        let payloads: HashMap<String, Payload> = emails.into_iter().collect();
                         context.insert("payloads", &payloads);
 
-                        //context.insert("domain_payload", &Payload::new_domain(domain));
-                        //context.insert("email_address", &query.email);
                         let rendered_config = global_state
                             .templates
                             .render("apple_config.plist", &context)?;
@@ -198,7 +196,7 @@ async fn serve(global_state: Arc<GlobalState>, req: Request<Body>) -> Result<Res
                             let certs = global_state
                                 .cert_map
                                 .get(&domain.email_domain)
-                                .ok_or(eyre!("No cert for domain {}", domain.email_domain))?;
+                                .ok_or_else( || eyre!("No cert for domain {}", domain.email_domain))?;
                             let singed = Pkcs7::sign(
                                 &certs.cert,
                                 &certs.key,
@@ -298,7 +296,7 @@ async fn run(global_state: Arc<GlobalState>) -> Result<()> {
     });
 
     let global_state = global_state.load();
-    let socket_addr = global_state.config.socket_address.clone();
+    let socket_addr = global_state.config.socket_address;
     // drop here so that the first config does not have to live in memory indefenitely after a reload
     drop(global_state);
 

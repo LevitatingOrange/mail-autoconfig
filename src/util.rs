@@ -23,7 +23,7 @@ pub async fn get_email_from_request(xml: impl AsyncBufRead) -> Result<String> {
                 bail!("No nested xml node {} allowed inside EMailAddress", name);
             }
             Some(ResolvedEvent::EndElement(_)) => {
-                ensure!(result.len() > 0, "no email found in request body");
+                ensure!(!result.is_empty(), "no email found in request body");
                 return Ok(result);
             }
             Some(ResolvedEvent::Text(_, text)) => {
